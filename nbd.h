@@ -47,6 +47,7 @@ enum {
 #define NBD_FLAG_SEND_FUA	(1 << 3)	/* Send FUA (Force Unit Access) */
 #define NBD_FLAG_ROTATIONAL	(1 << 4)	/* Use elevator algorithm - rotational media */
 #define NBD_FLAG_SEND_TRIM	(1 << 5)	/* Send TRIM (discard) */
+#define NBD_FLAG_RESUME	    (1 << 6)	/* Resume support */
 
 #define nbd_cmd(req) ((req)->cmd[0])
 
