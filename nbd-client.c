@@ -346,7 +346,8 @@ void setsizes(int nbd, u64 size64, int blocksize, u32 flags) {
 	ioctl(nbd, NBD_CLEAR_SOCK);
 
 	/* ignore error as kernel may not support */
-	ioctl(nbd, NBD_SET_FLAGS, (unsigned long) flags);
+	if (ioctl(nbd, NBD_SET_FLAGS, (unsigned long) flags))
+		fprintf(stderr, "Flag setting unrecognized by kernel?\n");
 
 	if (ioctl(nbd, BLKROSET, (unsigned long) &read_only) < 0)
 		err("Unable to set read-only attribute for device");
@@ -394,8 +395,8 @@ void usage(char* errmsg, ...) {
 	} else {
 		fprintf(stderr, "nbd-client version %s\n", PACKAGE_VERSION);
 	}
-	fprintf(stderr, "Usage: nbd-client host port nbd_device [-block-size|-b block size] [-timeout|-t timeout] [-swap|-s] [-sdp|-S] [-persist|-p] [-nofork|-n]\n");
-	fprintf(stderr, "Or   : nbd-client -name|-N name host [port] nbd_device [-block-size|-b block size] [-timeout|-t timeout] [-swap|-s] [-sdp|-S] [-persist|-p] [-nofork|-n]\n");
+	fprintf(stderr, "Usage: nbd-client host port nbd_device [-block-size|-b block size] [-timeout|-t timeout] [-swap|-s] [-sdp|-S] [-persist|-p] [-resume|-r] [-nofork|-n]\n");
+	fprintf(stderr, "Or   : nbd-client -name|-N name host [port] nbd_device [-block-size|-b block size] [-timeout|-t timeout] [-swap|-s] [-sdp|-S] [-persist|-p] [-resume|-r] [-nofork|-n]\n");
 	fprintf(stderr, "Or   : nbd-client -d nbd_device\n");
 	fprintf(stderr, "Or   : nbd-client -c nbd_device\n");
 	fprintf(stderr, "Or   : nbd-client -h|--help\n");
@@ -429,6 +430,7 @@ int main(int argc, char *argv[]) {
 	char *nbddev=NULL;
 	int swap=0;
 	int cont=0;
+	u32 local_flags=0;
 	int timeout=0;
 	int sdp=0;
 	int G_GNUC_UNUSED nofork=0; // if -dNOFORK
@@ -451,15 +453,17 @@ int main(int argc, char *argv[]) {
 		{ "name", required_argument, NULL, 'N' },
 		{ "nofork", no_argument, NULL, 'n' },
 		{ "persist", no_argument, NULL, 'p' },
+		{ "resume", no_argument, NULL, 'r' },
 		{ "sdp", no_argument, NULL, 'S' },
 		{ "swap", no_argument, NULL, 's' },
 		{ "timeout", required_argument, NULL, 't' },
 		{ 0, 0, 0, 0 }, 
 	};
 
+	signal(SIGPIPE, SIG_IGN);
 	logging();
 
-	while((c=getopt_long_only(argc, argv, "-b:c:d:hlnN:pSst:", long_options, NULL))>=0) {
+	while((c=getopt_long_only(argc, argv, "-b:c:d:hlnN:rpSst:", long_options, NULL))>=0) {
 		switch(c) {
 		case 1:
 			// non-option argument
@@ -531,6 +535,8 @@ int main(int argc, char *argv[]) {
 				port = NBD_DEFAULT_PORT;
 			}
 			break;
+		case 'r':
+			local_flags |= NBD_FLAG_RESUME;
 		case 'p':
 			cont=1;
 			break;
@@ -565,7 +571,7 @@ int main(int argc, char *argv[]) {
 	if (nbd < 0)
 	  err("Cannot open NBD: %m\nPlease ensure the 'nbd' module is loaded.");
 
-	setsizes(nbd, size64, blocksize, flags);
+	setsizes(nbd, size64, blocksize, flags|local_flags);
 	set_timeout(nbd, timeout);
 	finish_sock(sock, nbd, swap);
 	if (swap) {
@@ -588,8 +594,7 @@ int main(int argc, char *argv[]) {
 	sa.sa_handler = SIG_IGN;
 	sigaction(SIGCHLD, &sa, NULL);
 #endif
-	do {
-#ifndef NOFORK
+    do {
 
 		sigfillset(&block);
 		sigdelset(&block, SIGKILL);
@@ -615,8 +620,9 @@ int main(int argc, char *argv[]) {
 			open(nbddev, O_RDONLY);
 			exit(0);
 		}
-#endif
+    } while (0);
 
+	do {
 		if (ioctl(nbd, NBD_DO_IT) < 0) {
 		        int error = errno;
 			fprintf(stderr, "nbd,%d: Kernel call returned: %d", getpid(), error);
@@ -629,7 +635,7 @@ int main(int argc, char *argv[]) {
 					u64 new_size;
 					u32 new_flags;
 
-					close(sock); close(nbd);
+					close(sock);
 					for (;;) {
 						fprintf(stderr, " Reconnecting\n");
 						sock = opennet(hostname, port, sdp);
@@ -637,15 +643,14 @@ int main(int argc, char *argv[]) {
 							break;
 						sleep (1);
 					}
-					nbd = open(nbddev, O_RDWR);
-					if (nbd < 0)
-						err("Cannot open NBD: %m");
 					negotiate(sock, &new_size, &new_flags, name, needed_flags, cflags, opts);
 					if (size64 != new_size) {
 						err("Size of the device changed. Bye");
 					}
-					setsizes(nbd, size64, blocksize,
-								new_flags);
+					/* do not clobber queue when resuming */
+					if ((local_flags & NBD_FLAG_RESUME) == 0) {
+						setsizes(nbd, size64, blocksize, new_flags | local_flags);
+					}
 
 					set_timeout(nbd, timeout);
 					finish_sock(sock,nbd,swap);
