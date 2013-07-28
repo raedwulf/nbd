@@ -594,7 +594,8 @@ int main(int argc, char *argv[]) {
 	sa.sa_handler = SIG_IGN;
 	sigaction(SIGCHLD, &sa, NULL);
 #endif
-    do {
+	do {
+#ifndef NOFORK
 
 		sigfillset(&block);
 		sigdelset(&block, SIGKILL);
@@ -620,9 +621,8 @@ int main(int argc, char *argv[]) {
 			open(nbddev, O_RDONLY);
 			exit(0);
 		}
-    } while (0);
+#endif
 
-	do {
 		if (ioctl(nbd, NBD_DO_IT) < 0) {
 		        int error = errno;
 			fprintf(stderr, "nbd,%d: Kernel call returned: %d", getpid(), error);
